@@ -3,3 +3,11 @@ Period: 2020-09-01..2025-06-27
 Window: 30
 Train end: 2024-03-31
 Val end: 2025-03-31
+
+Scalers:
+  scaler_X: Feature scaler (StandardScaler)
+  scaler_y: Target scaler (StandardScaler)
+
+Model Performance:
+  Test RMSE: 4.4713
+  Test R²: 0.4768

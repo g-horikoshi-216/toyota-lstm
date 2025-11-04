@@ -51,6 +51,210 @@
 | **LSTM** | 0.4862 | 0.6% | 92.9% | 時系列データの長期依存関係を学習 |
 | **GRU** | 0.4862 | 0.0% | 93.5% | LSTMの簡易版、計算効率が良い |
 
+---
+
+#### 2.1.1 RandomForest（ランダムフォレスト）
+
+**アルゴリズムの特徴**:
+- 複数の決定木を並列に学習し、多数決で予測するアンサンブル学習
+- 各木は異なるデータサブセットと特徴量サブセットで学習
+- 過学習に強く、特徴量の重要度が計算可能
+
+**パラメータ設定**:
+```python
+RandomForestClassifier(
+    n_estimators=100,        # 決定木の数
+    max_depth=10,            # 各木の最大深さ
+    min_samples_split=20,    # ノード分割に必要な最小サンプル数
+    min_samples_leaf=10,     # 葉ノードに必要な最小サンプル数
+    class_weight='balanced', # クラス不均衡対策（クラス重み自動調整）
+    random_state=42,         # 乱数シード（再現性確保）
+    n_jobs=-1                # 並列処理（全CPUコア使用）
+)
+```
+
+**パラメータの意図**:
+- `max_depth=10`: 深すぎる木を防ぎ、過学習を抑制
+- `min_samples_split=20`, `min_samples_leaf=10`: ノイズへの過剰適応を防止
+- `class_weight='balanced'`: クラス不均衡（下落54.3%, 上昇45.7%）に対応
+
+**結果の考察**:
+- 正解率49.68%とランダム予測に近い
+- 上昇予測が90%と極端に偏り、クラス不均衡対策が不十分
+- 過学習抑制のパラメータが強すぎた可能性
+
+---
+
+#### 2.1.2 XGBoost（Extreme Gradient Boosting）
+
+**アルゴリズムの特徴**:
+- 勾配ブースティングの高速・高精度な実装
+- 前の木の誤差を次の木が学習する逐次的なアンサンブル
+- 正則化項により過学習を防止
+- 欠損値の自動処理、並列処理に対応
+
+**パラメータ設定**:
+```python
+XGBClassifier(
+    n_estimators=100,              # ブースティングラウンド数
+    max_depth=6,                   # 各木の最大深さ
+    learning_rate=0.1,             # 学習率（各木の寄与度）
+    subsample=0.8,                 # サンプリング比率（行）
+    colsample_bytree=0.8,          # サンプリング比率（列）
+    scale_pos_weight=1.30,         # 正例のクラス重み（5941/4999）
+    random_state=42,
+    n_jobs=-1,
+    eval_metric='logloss'          # 評価指標（二値分類の対数損失）
+)
+```
+
+**パラメータの意図**:
+- `learning_rate=0.1`: 標準的な学習率で安定した収束
+- `subsample=0.8`, `colsample_bytree=0.8`: ランダム性を導入し過学習防止
+- `scale_pos_weight=1.30`: 上昇クラス（少数派）の重要度を上げる
+- `max_depth=6`: RandomForestより深い木で複雑なパターンを学習
+
+**結果の考察**:
+- 正解率51.29%とRandomForestより2.6ポイント改善
+- 予測バランスも改善（下落34.2%, 上昇65.8%）
+- ブースティングによる逐次学習が効果的
+
+---
+
+#### 2.1.3 LightGBM（Light Gradient Boosting Machine）
+
+**アルゴリズムの特徴**:
+- XGBoostと同じ勾配ブースティングだが、より高速・省メモリ
+- Leaf-wise（葉優先）の木成長戦略で精度向上
+- ヒストグラムベースの分割で高速化
+- カテゴリ変数のネイティブサポート
+
+**パラメータ設定**:
+```python
+LGBMClassifier(
+    n_estimators=100,              # ブースティングラウンド数
+    max_depth=6,                   # 各木の最大深さ
+    learning_rate=0.1,             # 学習率
+    subsample=0.8,                 # サンプリング比率（行）
+    colsample_bytree=0.8,          # サンプリング比率（列）
+    scale_pos_weight=1.30,         # 正例のクラス重み
+    random_state=42,
+    n_jobs=-1,
+    verbose=-1                     # ログ出力を抑制
+)
+```
+
+**パラメータの意図**:
+- XGBoostと同じパラメータ設定で公平な比較
+- Leaf-wiseの木成長により、同じパラメータでも高精度
+
+**結果の考察**:
+- **正解率51.94%で全モデル中最高**
+- XGBoostより0.65ポイント改善
+- 予測バランスも良好（下落31.0%, 上昇69.0%）
+- 計算速度も最速
+
+---
+
+#### 2.1.4 LSTM（Long Short-Term Memory）
+
+**アルゴリズムの特徴**:
+- リカレントニューラルネットワーク（RNN）の一種
+- 長期依存関係を学習できるゲート機構
+- 時系列データの順序情報を活用
+- 入力は3次元（サンプル数, タイムステップ, 特徴量数）
+
+**データ準備**:
+- **Lookback期間**: 20日（過去20日分のデータで予測）
+- **入力形状**: (10920, 20, 10) = (サンプル数, 過去20日, 10特徴量)
+- **正規化**: StandardScalerで各特徴量を標準化（平均0, 分散1）
+
+**モデル構造**:
+```python
+Sequential([
+    LSTM(32, return_sequences=True, input_shape=(20, 10)),  # 第1層: 32ユニット
+    Dropout(0.3),                                           # ドロップアウト率30%
+    LSTM(16, return_sequences=False),                       # 第2層: 16ユニット
+    Dropout(0.3),
+    Dense(8, activation='relu'),                            # 全結合層: 8ユニット
+    Dropout(0.2),
+    Dense(1, activation='sigmoid')                          # 出力層: 二値分類
+])
+```
+
+**学習パラメータ**:
+```python
+# オプティマイザとコンパイル
+optimizer = Adam(learning_rate=0.0005)  # 学習率を小さく設定
+loss = 'binary_crossentropy'            # 二値分類の損失関数
+metrics = ['accuracy']
+
+# 学習設定
+epochs = 100                            # 最大エポック数
+batch_size = 64                         # ミニバッチサイズ
+validation_split = 0.1                  # 検証データ比率
+
+# クラス重み（クラス不均衡対策）
+class_weight = {
+    0: 0.459,  # 下落クラスの重み（n_samples / (2 * n_class_0)）
+    1: 0.541   # 上昇クラスの重み（n_samples / (2 * n_class_1)）
+}
+
+# コールバック
+- EarlyStopping(monitor='val_loss', patience=15)  # 15エポック改善なしで停止
+- ReduceLROnPlateau(factor=0.5, patience=7)       # 学習率を半減
+```
+
+**パラメータの意図**:
+- `learning_rate=0.0005`: 小さい学習率で慎重に学習（過学習防止）
+- `Dropout(0.3, 0.3, 0.2)`: 各層でドロップアウトを適用（過学習防止）
+- `batch_size=64`: 小さめのバッチで勾配の分散を確保
+- `class_weight`: クラス不均衡に対応
+- `EarlyStopping`: 過学習を検知して早期停止
+- `ReduceLROnPlateau`: 学習停滞時に学習率を動的調整
+
+**結果の考察**:
+- **正解率48.62%とランダム予測以下**
+- **上昇予測が92.9%と極端に偏る**
+- 学習エポック数: 26（EarlyStoppingで停止）
+- クラス重みを設定しても偏りが解消されず
+- 過学習抑制パラメータが強すぎた、またはデータ量不足の可能性
+
+---
+
+#### 2.1.5 GRU（Gated Recurrent Unit）
+
+**アルゴリズムの特徴**:
+- LSTMを簡略化したリカレントニューラルネットワーク
+- ゲート数が少なく（2つ: リセットゲート、更新ゲート）、計算効率が良い
+- LSTMと同等の性能を少ないパラメータで実現
+
+**データ準備**:
+- LSTMと同じ（Lookback=20日、標準化済み）
+
+**モデル構造**:
+```python
+Sequential([
+    GRU(32, return_sequences=True, input_shape=(20, 10)),  # 第1層: 32ユニット
+    Dropout(0.3),
+    GRU(16, return_sequences=False),                       # 第2層: 16ユニット
+    Dropout(0.3),
+    Dense(8, activation='relu'),                           # 全結合層: 8ユニット
+    Dropout(0.2),
+    Dense(1, activation='sigmoid')                         # 出力層: 二値分類
+])
+```
+
+**学習パラメータ**:
+- LSTMと完全に同じ設定（公平な比較のため）
+
+**結果の考察**:
+- **正解率48.62%でLSTMと同じ**
+- **上昇予測が93.5%とさらに偏る（下落予測0%）**
+- 学習エポック数: 26（LSTMと同じ）
+- LSTMより単純な構造だが、性能は変わらず
+- クラス不均衡への過剰適応が顕著
+
 ### 2.2 最終選定モデル: **LightGBM**
 
 #### 選定理由
